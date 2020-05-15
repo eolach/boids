@@ -1,19 +1,18 @@
 use gdextras::input::InputEventExt;
 use gdnative::{
     godot_error, godot_wrap_method, godot_wrap_method_inner, godot_wrap_method_parameter_count,
-    methods, NativeClass, InputEvent, Node2D, Rect2, Vector2
+    methods, InputEvent, NativeClass, Node2D, Rect2, Vector2,
 };
 use legion::prelude::*;
 use rand::prelude::*;
-use crate::spawner;
 
-const BOID_COUNT: usize = 30;
+use crate::boids::{Acceleration, Boid, Velocity, Pos, Forces, add_boid_systems};
+use crate::spawner;
+const BOID_COUNT: usize = 800;
 
 fn physics_systems() -> Schedule {
     let schedule = Schedule::builder();
-
-    // Add boids systems here
-
+    let schedule = add_boid_systems(schedule);
     schedule.build()
 }
 
@@ -21,6 +20,9 @@ fn physics_systems() -> Schedule {
 //     - Resources -
 // -----------------------------------------------------------------------------
 pub struct Delta(pub f32);
+pub struct CohesionMul(pub f32);
+pub struct SeparationMul(pub f32);
+pub struct AlignmentMul(pub f32);
 
 #[derive(Debug, Clone, Copy)]
 pub struct Viewport(pub Rect2);
@@ -32,8 +34,6 @@ impl Viewport {
         Self(rect)
     }
 }
-
-
 
 // -----------------------------------------------------------------------------
 //     - Godot node -
@@ -51,11 +51,16 @@ pub struct GameWorld {
 impl GameWorld {
     pub fn _init(_owner: Node2D) -> Self {
         let mut resources = Resources::default();
+
+        // Resources
         resources.insert(Delta(0.));
+        resources.insert(CohesionMul(1.0));
+        resources.insert(SeparationMul(1.0));
+        resources.insert(AlignmentMul(1.0));
 
         let physics = physics_systems();
 
-        Self { 
+        Self {
             world: Universe::new().create_world(),
             resources,
             physics,
@@ -80,17 +85,19 @@ impl GameWorld {
             owner.add_child(Some(boid.to_node()), false);
             boid.set_global_position(pos);
 
-
-            let velocity = Vector2::new(
-                rng.gen_range(-500., 500.),
-                rng.gen_range(-500., 500.),
-            ).normalize() * 500f32;
+            let velocity = Vector2::new(rng.gen_range(-500., 500.), rng.gen_range(-500., 500.))
+                .normalize()
+                * 500f32;
 
             self.world.insert(
                 (),
                 Some((
-                    // Boid(boid)
-                ))
+                    Boid(boid),
+                    Velocity(velocity),
+                    Acceleration(Vector2::zero()),
+                    Pos(pos),
+                    Forces::zero(),
+                )),
             );
         }
     }
@@ -104,7 +111,25 @@ impl GameWorld {
 
     #[export]
     pub fn _physics_process(&mut self, owner: Node2D, delta: f64) {
-        self.resources.get_mut::<Delta>().map(|mut d| d.0 = delta as f32);
+        self.resources
+            .get_mut::<Delta>()
+            .map(|mut d| d.0 = delta as f32);
         self.physics.execute(&mut self.world, &mut self.resources);
     }
+
+    #[export]
+    pub fn cohesion_value_changed(&mut self, owner: Node2D, val: f32) {
+        self.resources.get_mut::<CohesionMul>().map(|mut mul| mul.0 = val);
+    }
+
+    #[export]
+    pub fn separation_value_changed(&mut self, owner: Node2D, val: f32) {
+        self.resources.get_mut::<SeparationMul>().map(|mut mul| mul.0 = val);
+    }
+
+    #[export]
+    pub fn alignment_value_changed(&mut self, owner: Node2D, val: f32) {
+        self.resources.get_mut::<AlignmentMul>().map(|mut mul| mul.0 = val);
+    }
+
 }

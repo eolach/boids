@@ -2,6 +2,7 @@ use gdnative::*;
 
 mod gameworld;
 mod spawner;
+mod boids;
 
 fn init(handle: init::InitHandle) {
     handle.add_class::<gameworld::GameWorld>();
