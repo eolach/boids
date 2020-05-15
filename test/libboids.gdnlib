@@ -1,0 +1,15 @@
+[entry]
+
+X11.64="res://lib/libboids.so"
+Server.64="res://lib/libboids.so"
+
+[dependencies]
+
+X11.64=[  ]
+
+[general]
+
+singleton=false
+load_once=true
+symbol_prefix="godot_"
+reloadable=true
