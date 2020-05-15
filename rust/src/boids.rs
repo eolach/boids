@@ -2,7 +2,9 @@ use gdnative::{Sprite, Vector2};
 use legion::prelude::*;
 use legion::systems::schedule::Builder;
 
-use crate::gameworld::{Delta, Viewport, CohesionMul, SeparationMul, AlignmentMul};
+use crate::gameworld::{
+    AlignmentMul, CohesionMul, Delta, SeparationMul, ShouldFlee, ShouldSeek, Target, Viewport,
+};
 
 // -----------------------------------------------------------------------------
 //     - Components -
@@ -20,14 +22,18 @@ pub struct Forces {
     cohesion: Vector2,
     separation: Vector2,
     alignment: Vector2,
+    seek: Vector2,
+    flee: Vector2,
 }
 
 impl Forces {
     pub fn zero() -> Self {
         Self {
-            cohesion: Vector2::zero(), 
-            separation: Vector2::zero(), 
-            alignment: Vector2::zero(), 
+            cohesion: Vector2::zero(),
+            separation: Vector2::zero(),
+            alignment: Vector2::zero(),
+            seek: Vector2::zero(),
+            flee: Vector2::zero(),
         }
     }
 
@@ -46,7 +52,10 @@ fn cohesion() -> Box<dyn Runnable> {
     SystemBuilder::new("cohesion")
         .with_query(<(Read<Pos>, Write<Forces>)>::query())
         .build_thread_local(|_, world, _, query| {
-            let all_positions = query.iter_mut(world).map(|(pos, _)| pos.0).collect::<Vec<_>>();
+            let all_positions = query
+                .iter_mut(world)
+                .map(|(pos, _)| pos.0)
+                .collect::<Vec<_>>();
             let neighbour_distance = 200f32;
 
             for (pos, mut force) in query.iter_mut(world) {
@@ -73,7 +82,10 @@ fn separation() -> Box<dyn Runnable> {
     SystemBuilder::new("separation")
         .with_query(<(Read<Pos>, Write<Forces>)>::query())
         .build_thread_local(|cmd, world, resources, query| {
-            let all_positions = query.iter_mut(world).map(|(pos, _)| pos.0).collect::<Vec<_>>();
+            let all_positions = query
+                .iter_mut(world)
+                .map(|(pos, _)| pos.0)
+                .collect::<Vec<_>>();
             let neighbour_distance = 100f32;
 
             for (pos, mut force) in query.iter_mut(world) {
@@ -99,9 +111,12 @@ fn alignment() -> Box<dyn Runnable> {
     SystemBuilder::new("alignment")
         .with_query(<(Read<Pos>, Read<Velocity>, Write<Forces>)>::query())
         .build_thread_local(|cmd, world, resources, query| {
-            let all_positions = query.iter_mut(world).map(|(pos, vel, _)| (pos.0, vel.0)).collect::<Vec<_>>();
+            let all_positions = query
+                .iter_mut(world)
+                .map(|(pos, vel, _)| (pos.0, vel.0))
+                .collect::<Vec<_>>();
             let neighbour_distance = 100f32;
-            
+
             for (pos, vel, mut force) in query.iter_mut(world) {
                 let mut count = 0;
 
@@ -116,6 +131,36 @@ fn alignment() -> Box<dyn Runnable> {
 
                 if count > 0 {
                     force.alignment /= count as f32;
+                }
+            }
+        })
+}
+
+fn seek() -> Box<dyn Runnable> {
+    SystemBuilder::new("seek")
+        .read_resource::<Target>()
+        .with_query(<(Read<Pos>, Write<Forces>)>::query())
+        .build_thread_local(|cmd, world, target, query| unsafe {
+            let destination = target.0.get_global_position();
+            for (pos, mut force) in query.iter_mut(world) {
+                let direction = destination - pos.0;
+                force.seek = direction.with_max_length(MAX_SPEED);
+            }
+        })
+}
+
+fn flee() -> Box<dyn Runnable> {
+    SystemBuilder::new("seek")
+        .read_resource::<Target>()
+        .with_query(<(Read<Pos>, Write<Forces>)>::query())
+        .build_thread_local(|cmd, world, target, query| unsafe {
+            let destination = target.0.get_global_position();
+            let flee_dist = 150.;
+
+            for (pos, mut force) in query.iter_mut(world) {
+                let direction = pos.0 - destination;
+                if direction.length() < flee_dist {
+                    force.flee = direction.with_max_length(MAX_SPEED);
                 }
             }
         })
@@ -202,13 +247,24 @@ fn apply_forces() -> Box<dyn Runnable> {
         .read_resource::<CohesionMul>()
         .read_resource::<SeparationMul>()
         .read_resource::<AlignmentMul>()
+        .read_resource::<ShouldSeek>()
+        .read_resource::<ShouldFlee>()
         .with_query(<(Read<Forces>, Write<Acceleration>)>::query())
         .build_thread_local(|cmd, world, resources, query| {
-            let (cohesion_mul, separation_mul, alignment_mul) = resources;
+            let (cohesion_mul, separation_mul, alignment_mul, seek, flee) = resources;
             for (force, mut acc) in query.iter_mut(world) {
                 acc.0 += force.cohesion * cohesion_mul.0;
                 acc.0 += force.separation * separation_mul.0;
                 acc.0 += force.alignment * alignment_mul.0;
+
+                if seek.0 {
+                    acc.0 += force.seek;
+                }
+
+                if flee.0 {
+                    acc.0 += force.flee;
+                    eprintln!("{:?}", "fleeeee");
+                }
             }
         })
 }
@@ -220,6 +276,8 @@ pub fn add_boid_systems(builder: Builder) -> Builder {
         .add_thread_local(cohesion())
         .add_thread_local(separation())
         .add_thread_local(alignment())
+        .add_thread_local(seek())
+        .add_thread_local(flee())
         .add_thread_local(apply_forces())
         .add_thread_local(move_boids())
         .add_thread_local(rotate())

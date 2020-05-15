@@ -1,14 +1,15 @@
 use gdextras::input::InputEventExt;
+use gdextras::node_ext::NodeExt;
 use gdnative::{
     godot_error, godot_wrap_method, godot_wrap_method_inner, godot_wrap_method_parameter_count,
-    methods, InputEvent, NativeClass, Node2D, Rect2, Vector2,
+    methods, InputEvent, NativeClass, Node2D, Rect2, Vector2, InputEventMouse, Sprite
 };
 use legion::prelude::*;
 use rand::prelude::*;
 
 use crate::boids::{Acceleration, Boid, Velocity, Pos, Forces, add_boid_systems};
 use crate::spawner;
-const BOID_COUNT: usize = 800;
+const BOID_COUNT: usize = 80;
 
 fn physics_systems() -> Schedule {
     let schedule = Schedule::builder();
@@ -23,6 +24,13 @@ pub struct Delta(pub f32);
 pub struct CohesionMul(pub f32);
 pub struct SeparationMul(pub f32);
 pub struct AlignmentMul(pub f32);
+pub struct ShouldFlee(pub bool);
+pub struct ShouldSeek(pub bool);
+
+pub struct Target(pub Sprite);
+
+unsafe impl Send for Target {}
+unsafe impl Sync for Target {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Viewport(pub Rect2);
@@ -57,6 +65,8 @@ impl GameWorld {
         resources.insert(CohesionMul(1.0));
         resources.insert(SeparationMul(1.0));
         resources.insert(AlignmentMul(1.0));
+        resources.insert(ShouldSeek(false));
+        resources.insert(ShouldFlee(false));
 
         let physics = physics_systems();
 
@@ -70,6 +80,10 @@ impl GameWorld {
     #[export]
     pub unsafe fn _ready(&mut self, mut owner: Node2D) {
         let mut rng = thread_rng();
+
+        // Add target
+        let target = owner.get_and_cast::<Sprite>("Target").expect("failed to get the target");
+        self.resources.insert(Target(target));
 
         // Add viewport rect
         let size = owner.get_viewport().unwrap().get_size();
@@ -107,8 +121,20 @@ impl GameWorld {
         if event.action_pressed("ui_cancel") {
             unsafe { owner.get_tree().map(|mut tree| tree.quit(0)) };
         }
+
+        if let Some(ev) = event.cast::<InputEventMouse>() {
+            if ev.is_pressed() {
+                unsafe {
+                    let pos = owner.get_global_mouse_position();
+                    self.resources.get_mut::<Target>().map(|mut target| target.0.set_global_position(pos));
+                }
+            }
+        }
     }
 
+    // -----------------------------------------------------------------------------
+    //     - signals -
+    // -----------------------------------------------------------------------------
     #[export]
     pub fn _physics_process(&mut self, owner: Node2D, delta: f64) {
         self.resources
@@ -132,4 +158,14 @@ impl GameWorld {
         self.resources.get_mut::<AlignmentMul>().map(|mut mul| mul.0 = val);
     }
 
+    #[export]
+    pub fn seek_toggled(&mut self, owner: Node2D, toggle: bool) {
+        self.resources.get_mut::<ShouldSeek>().map(|mut seek| seek.0 = toggle);
+    }
+
+    #[export]
+    pub fn flee_toggled(&mut self, owner: Node2D, toggle: bool) {
+        self.resources.get_mut::<ShouldFlee>().map(|mut flee| flee.0 = toggle);
+        eprintln!("{:?}", "flee toggle");
+    }
 }
